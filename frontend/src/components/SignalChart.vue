@@ -17,7 +17,7 @@ const store = useCanBusStore();
 const chartRef = ref<InstanceType<typeof VChart> | null>(null);
 
 const chartOption = computed(() => {
-  const signalEntries = Array.from(store.signals.entries());
+  const signalEntries = Array.from(store.currentSignals.entries());
 
   const colors = ['#06b6d4', '#22c55e', '#ef4444', '#eab308', '#a855f7'];
   const series = signalEntries.map(([name, sig], idx) => ({
@@ -87,12 +87,23 @@ const chartOption = computed(() => {
 </script>
 
 <template>
-  <div class="flex flex-col h-full bg-gray-900 rounded-lg overflow-hidden">
+  <div class="flex flex-col h-full bg-gray-900 rounded-lg overflow-hidden relative">
     <div class="px-4 py-2 bg-gray-800 border-b border-gray-700 flex items-center justify-between">
-      <h3 class="text-sm font-semibold text-gray-300">信号趋势图</h3>
+      <div class="flex items-center gap-2">
+        <h3 class="text-sm font-semibold text-gray-300">信号趋势图</h3>
+        <span
+          v-if="store.isPlayback"
+          class="px-1.5 py-0.5 rounded text-xs font-bold bg-cyan-900/50 text-cyan-400"
+        >
+          回看
+        </span>
+      </div>
       <span class="text-xs text-gray-500">
-        {{ store.signals.size }} 个信号活跃
+        {{ store.currentSignals.size }} 个信号{{ store.isPlayback ? '' : '活跃' }}
       </span>
+    </div>
+    <div v-if="store.isPlayback && store.isLoadingPlayback" class="absolute inset-0 flex items-center justify-center bg-gray-900/80 z-10">
+      <p class="text-cyan-400 text-sm">加载回看数据中...</p>
     </div>
     <div class="flex-1 p-2">
       <VChart
@@ -103,8 +114,10 @@ const chartOption = computed(() => {
         style="min-height: 200px;"
       />
     </div>
-    <div v-if="store.signals.size === 0" class="absolute inset-0 flex items-center justify-center pointer-events-none">
-      <p class="text-gray-600 text-sm">等待信号数据...</p>
+    <div v-if="store.currentSignals.size === 0 && !store.isLoadingPlayback" class="absolute inset-0 flex items-center justify-center pointer-events-none">
+      <p class="text-gray-600 text-sm">
+        {{ store.isPlayback ? '当前范围内暂无信号数据' : '等待信号数据...' }}
+      </p>
     </div>
   </div>
 </template>

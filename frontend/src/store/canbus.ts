@@ -5,6 +5,8 @@ import { parseDbc, decodeCanFrame, DEFAULT_DBC_CONTENT } from '../utils/dbc-pars
 
 let frameIdCounter = 0;
 
+const API_BASE = 'http://localhost:8080/api';
+
 export const useCanBusStore = defineStore('canbus', () => {
   const frames = ref<CanFrame[]>([]);
   const signals = ref<Map<string, { name: string; data: { time: number; value: number }[] }>>(new Map());
@@ -13,6 +15,15 @@ export const useCanBusStore = defineStore('canbus', () => {
   const filterText = ref('');
   const isCapturing = ref(false);
   const pollInterval = ref<number | null>(null);
+
+  const isPlayback = ref(false);
+  const playbackFrames = ref<CanFrame[]>([]);
+  const playbackSignals = ref<Map<string, { name: string; data: { time: number; value: number }[] }>>(new Map());
+  const playbackStartTime = ref<number>(0);
+  const playbackEndTime = ref<number>(0);
+  const historyStartTime = ref<number>(0);
+  const historyEndTime = ref<number>(0);
+  const isLoadingPlayback = ref(false);
 
   const busStats = ref<BusStats>({
     totalFrames: 0,
@@ -23,8 +34,16 @@ export const useCanBusStore = defineStore('canbus', () => {
     lastUpdate: Date.now()
   });
 
+  const currentFrames = computed(() => {
+    return isPlayback.value ? playbackFrames.value : frames.value;
+  });
+
+  const currentSignals = computed(() => {
+    return isPlayback.value ? playbackSignals.value : signals.value;
+  });
+
   const filteredFrames = computed(() => {
-    let result = frames.value;
+    let result = currentFrames.value;
 
     if (filterId.value.trim()) {
       const idFilter = filterId.value.trim().toLowerCase().replace(/^0x/, '');
@@ -52,6 +71,21 @@ export const useCanBusStore = defineStore('canbus', () => {
     return busStats.value.busLoad.toFixed(1);
   });
 
+  function buildSignalsFromFrames(framesList: CanFrame[]): Map<string, { name: string; data: { time: number; value: number }[] }> {
+    const result = new Map<string, { name: string; data: { time: number; value: number }[] }>();
+    for (const frame of framesList) {
+      const msgDef = dbcMessages.value.get(frame.arbitrationId);
+      const decoded = msgDef ? decodeCanFrame(frame, msgDef) : frame.decoded;
+      for (const [name, value] of Object.entries(decoded)) {
+        if (!result.has(name)) {
+          result.set(name, { name, data: [] });
+        }
+        result.get(name)!.data.push({ time: frame.timestamp, value });
+      }
+    }
+    return result;
+  }
+
   function addFrame(frame: CanFrame) {
     frames.value.push(frame);
     if (frames.value.length > 500) {
@@ -63,7 +97,6 @@ export const useCanBusStore = defineStore('canbus', () => {
     else busStats.value.txCount++;
     busStats.value.lastUpdate = Date.now();
 
-    // Update signal history
     const msgDef = dbcMessages.value.get(frame.arbitrationId);
     if (msgDef) {
       const decoded = decodeCanFrame(frame, msgDef);
@@ -80,13 +113,14 @@ export const useCanBusStore = defineStore('canbus', () => {
       }
     }
 
-    // Simulate bus load (random 15-45%)
     busStats.value.busLoad = 15 + Math.random() * 30;
   }
 
   function clearFrames() {
     frames.value = [];
     signals.value = new Map();
+    playbackFrames.value = [];
+    playbackSignals.value = new Map();
     busStats.value = {
       totalFrames: 0,
       rxCount: 0,
@@ -114,14 +148,12 @@ export const useCanBusStore = defineStore('canbus', () => {
 
     const msgDef = dbcMessages.value.get(arbId);
 
-    // Generate realistic OBD-II values
     const rpm = Math.floor(800 + Math.random() * 5200);
     const speed = Math.floor(Math.random() * 120);
     const temp = Math.floor(70 + Math.random() * 35);
     const throttle = Math.floor(Math.random() * 100);
     const load = Math.floor(Math.random() * 100);
 
-    // Encode values into bytes (simplified encoding for display)
     const rpmRaw = Math.round(rpm / 0.25);
     const rpmLow = rpmRaw & 0xFF;
     const rpmHigh = (rpmRaw >> 8) & 0xFF;
@@ -158,12 +190,10 @@ export const useCanBusStore = defineStore('canbus', () => {
 
   function startCapture() {
     if (isCapturing.value) return;
-    isCapturing.value = true;
-
-    // Load mock DBC if not loaded
     if (dbcMessages.value.size === 0) {
       loadMockDbc();
     }
+    isCapturing.value = true;
 
     pollInterval.value = window.setInterval(() => {
       const frame = generateMockFrame();
@@ -186,14 +216,94 @@ export const useCanBusStore = defineStore('canbus', () => {
   }
 
   function exportFrames(): string {
+    const exportFrames = currentFrames.value;
     const header = 'Timestamp,Direction,CAN_ID,DLC,Data,Decoded\n';
-    const rows = frames.value.map(f => {
+    const rows = exportFrames.map(f => {
       const decodedStr = Object.entries(f.decoded)
         .map(([k, v]) => `${k}=${v}`)
         .join('; ');
       return `${f.timestamp},${f.direction},0x${f.arbitrationId.toString(16).toUpperCase()},${f.dlc},"${f.data}","${decodedStr}"`;
     }).join('\n');
     return header + rows;
+  }
+
+  async function fetchHistoryRange() {
+    try {
+      const res = await fetch(`${API_BASE}/frames/range`);
+      const data = await res.json();
+      historyStartTime.value = data.startTime || 0;
+      historyEndTime.value = data.endTime || 0;
+      if (!playbackStartTime.value && historyStartTime.value) {
+        playbackStartTime.value = historyStartTime.value;
+      }
+      if (!playbackEndTime.value && historyEndTime.value) {
+        playbackEndTime.value = historyEndTime.value;
+      }
+      return data;
+    } catch (e) {
+      console.warn('fetchHistoryRange failed, using local data', e);
+      if (frames.value.length > 0) {
+        historyStartTime.value = frames.value[0].timestamp;
+        historyEndTime.value = frames.value[frames.value.length - 1].timestamp;
+        playbackStartTime.value = historyStartTime.value;
+        playbackEndTime.value = historyEndTime.value;
+      }
+    }
+  }
+
+  async function loadPlaybackData() {
+    if (!playbackStartTime.value || !playbackEndTime.value) return;
+    isLoadingPlayback.value = true;
+    try {
+      const res = await fetch(
+        `${API_BASE}/frames/history?startTime=${playbackStartTime.value}&endTime=${playbackEndTime.value}`
+      );
+      const data: CanFrame[] = await res.json();
+      if (data.length > 0) {
+        playbackFrames.value = data;
+        playbackSignals.value = buildSignalsFromFrames(data);
+      } else {
+        playbackFrames.value = frames.value.filter(
+          f => f.timestamp >= playbackStartTime.value && f.timestamp <= playbackEndTime.value
+        );
+        playbackSignals.value = buildSignalsFromFrames(playbackFrames.value);
+      }
+    } catch (e) {
+      console.warn('loadPlaybackData from API failed, using local filter', e);
+      playbackFrames.value = frames.value.filter(
+        f => f.timestamp >= playbackStartTime.value && f.timestamp <= playbackEndTime.value
+      );
+      playbackSignals.value = buildSignalsFromFrames(playbackFrames.value);
+    } finally {
+      isLoadingPlayback.value = false;
+    }
+  }
+
+  function enterPlaybackMode() {
+    if (dbcMessages.value.size === 0) {
+      loadMockDbc();
+    }
+    isPlayback.value = true;
+    if (playbackFrames.value.length === 0) {
+      loadPlaybackData();
+    }
+  }
+
+  function exitPlaybackMode() {
+    isPlayback.value = false;
+  }
+
+  function togglePlaybackMode() {
+    if (isPlayback.value) {
+      exitPlaybackMode();
+    } else {
+      enterPlaybackMode();
+    }
+  }
+
+  async function refreshPlaybackData() {
+    await fetchHistoryRange();
+    await loadPlaybackData();
   }
 
   return {
@@ -204,8 +314,18 @@ export const useCanBusStore = defineStore('canbus', () => {
     filterText,
     busStats,
     isCapturing,
+    currentFrames,
+    currentSignals,
     filteredFrames,
     busLoadPercent,
+    isPlayback,
+    playbackFrames,
+    playbackSignals,
+    playbackStartTime,
+    playbackEndTime,
+    historyStartTime,
+    historyEndTime,
+    isLoadingPlayback,
     addFrame,
     clearFrames,
     loadMockDbc,
@@ -213,6 +333,12 @@ export const useCanBusStore = defineStore('canbus', () => {
     startCapture,
     stopCapture,
     decodeFrame,
-    exportFrames
+    exportFrames,
+    fetchHistoryRange,
+    loadPlaybackData,
+    enterPlaybackMode,
+    exitPlaybackMode,
+    togglePlaybackMode,
+    refreshPlaybackData
   };
 });

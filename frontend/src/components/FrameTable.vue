@@ -7,7 +7,14 @@ const selectedFrameId = ref<string | null>(null);
 
 const selectedFrame = computed(() => {
   if (!selectedFrameId.value) return null;
-  return store.frames.find(f => f.id === selectedFrameId.value) || null;
+  return store.currentFrames.find(f => f.id === selectedFrameId.value) || null;
+});
+
+const playbackStats = computed(() => {
+  const frames = store.currentFrames;
+  const rx = frames.filter(f => f.direction === 'RX').length;
+  const tx = frames.filter(f => f.direction === 'TX').length;
+  return { rx, tx };
 });
 
 function selectFrame(id: string) {
@@ -63,21 +70,34 @@ function getSignalUnit(name: string): string {
   <div class="flex flex-col h-full">
     <!-- Bus Stats Header -->
     <div class="flex items-center gap-4 px-4 py-2 bg-gray-800 border-b border-gray-700 text-sm">
+      <div class="flex items-center gap-2">
+        <span
+          class="px-1.5 py-0.5 rounded text-xs font-bold"
+          :class="store.isPlayback ? 'bg-cyan-900/50 text-cyan-400' : 'bg-gray-700 text-gray-400'"
+        >
+          {{ store.isPlayback ? '回看' : '实时' }}
+        </span>
+      </div>
       <div class="flex items-center gap-1">
         <span class="text-gray-400">总帧数:</span>
-        <span class="text-cyan-400 font-mono font-bold">{{ store.busStats.totalFrames }}</span>
+        <span class="text-cyan-400 font-mono font-bold">{{ store.currentFrames.length }}</span>
       </div>
       <div class="flex items-center gap-1">
         <span class="text-gray-400">RX:</span>
-        <span class="text-green-400 font-mono font-bold">{{ store.busStats.rxCount }}</span>
+        <span class="text-green-400 font-mono font-bold">{{ store.isPlayback ? playbackStats.rx : store.busStats.rxCount }}</span>
       </div>
       <div class="flex items-center gap-1">
         <span class="text-gray-400">TX:</span>
-        <span class="text-blue-400 font-mono font-bold">{{ store.busStats.txCount }}</span>
+        <span class="text-blue-400 font-mono font-bold">{{ store.isPlayback ? playbackStats.tx : store.busStats.txCount }}</span>
       </div>
-      <div class="flex items-center gap-1">
+      <div v-if="!store.isPlayback" class="flex items-center gap-1">
         <span class="text-gray-400">总线负载:</span>
         <span class="text-yellow-400 font-mono font-bold">{{ store.busLoadPercent }}%</span>
+      </div>
+      <div v-if="store.isPlayback && (store.filterText || store.filterId)" class="flex items-center gap-1 ml-auto">
+        <span class="text-gray-400">筛选结果:</span>
+        <span class="text-yellow-400 font-mono font-bold">{{ store.filteredFrames.length }}</span>
+        <span class="text-gray-500">帧</span>
       </div>
     </div>
 
@@ -137,7 +157,12 @@ function getSignalUnit(name: string): string {
           </tr>
           <tr v-if="store.filteredFrames.length === 0">
             <td colspan="6" class="px-3 py-8 text-center text-gray-500">
-              暂无数据 — 点击"开始捕获"以模拟接收CAN帧
+              <template v-if="store.isPlayback">
+                当前时间范围内暂无数据 — 请调整时间范围或点击"刷新范围"
+              </template>
+              <template v-else>
+                暂无数据 — 点击"开始捕获"以模拟接收CAN帧
+              </template>
             </td>
           </tr>
         </tbody>

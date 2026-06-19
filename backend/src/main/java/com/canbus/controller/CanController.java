@@ -44,4 +44,26 @@ public class CanController {
     public Map<String, Object> getStats() {
         return canService.getStats(totalFrameCount);
     }
+
+    /**
+     * GET /api/frames/history - query frames by time range
+     * @param startTime start timestamp in ms
+     * @param endTime end timestamp in ms
+     * @return frames within the time range
+     */
+    @GetMapping("/frames/history")
+    public List<CanFrame> getFramesByTimeRange(
+            @RequestParam long startTime,
+            @RequestParam long endTime) {
+        return canService.queryFramesByTimeRange(startTime, endTime);
+    }
+
+    /**
+     * GET /api/frames/range - get the available history time range
+     * @return map with startTime, endTime, totalCount
+     */
+    @GetMapping("/frames/range")
+    public Map<String, Long> getHistoryTimeRange() {
+        return canService.getHistoryTimeRange();
+    }
 }

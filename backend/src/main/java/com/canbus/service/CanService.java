@@ -11,6 +11,8 @@ public class CanService {
     private static final int[] MESSAGE_IDS = {0x7DF, 0x7E8, 0x7E9, 0x7EA, 0x7EB};
     private final Random random = new Random();
     private int frameCounter = 0;
+    private final List<CanFrame> historyFrames = Collections.synchronizedList(new ArrayList<>());
+    private static final int MAX_HISTORY_SIZE = 10000;
 
     /**
      * Generate 20 mock OBD-II CAN frames with realistic values
@@ -18,9 +20,51 @@ public class CanService {
     public List<CanFrame> generateMockFrames() {
         List<CanFrame> frames = new ArrayList<>();
         for (int i = 0; i < 20; i++) {
-            frames.add(generateSingleFrame());
+            CanFrame frame = generateSingleFrame();
+            frames.add(frame);
+            historyFrames.add(frame);
+            if (historyFrames.size() > MAX_HISTORY_SIZE) {
+                historyFrames.subList(0, historyFrames.size() - MAX_HISTORY_SIZE).clear();
+            }
         }
         return frames;
+    }
+
+    /**
+     * Query frames by time range
+     * @param startTime start timestamp (ms)
+     * @param endTime end timestamp (ms)
+     * @return frames within the time range
+     */
+    public List<CanFrame> queryFramesByTimeRange(long startTime, long endTime) {
+        List<CanFrame> result = new ArrayList<>();
+        synchronized (historyFrames) {
+            for (CanFrame frame : historyFrames) {
+                if (frame.getTimestamp() >= startTime && frame.getTimestamp() <= endTime) {
+                    result.add(frame);
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Get the time range of all stored history frames
+     * @return map with "startTime" and "endTime" keys
+     */
+    public Map<String, Long> getHistoryTimeRange() {
+        Map<String, Long> range = new LinkedHashMap<>();
+        synchronized (historyFrames) {
+            if (historyFrames.isEmpty()) {
+                range.put("startTime", 0L);
+                range.put("endTime", 0L);
+            } else {
+                range.put("startTime", historyFrames.get(0).getTimestamp());
+                range.put("endTime", historyFrames.get(historyFrames.size() - 1).getTimestamp());
+            }
+            range.put("totalCount", (long) historyFrames.size());
+        }
+        return range;
     }
 
     private CanFrame generateSingleFrame() {
