@@ -1,11 +1,25 @@
 import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import type { CanFrame, DbcMessage, BusStats } from '../types';
 import { parseDbc, decodeCanFrame, DEFAULT_DBC_CONTENT } from '../utils/dbc-parser';
 
 let frameIdCounter = 0;
 
 const API_BASE = 'http://localhost:8080/api';
+const STORAGE_KEY = 'canbus-playback-state';
+const FRAMES_STORAGE_KEY = 'canbus-playback-frames';
+const MAX_CACHED_FRAMES = 2000;
+
+interface PersistedPlaybackState {
+  isPlayback: boolean;
+  playbackStartTime: number;
+  playbackEndTime: number;
+  historyStartTime: number;
+  historyEndTime: number;
+  filterId: string;
+  filterText: string;
+  savedAt: number;
+}
 
 export const useCanBusStore = defineStore('canbus', () => {
   const frames = ref<CanFrame[]>([]);
@@ -24,6 +38,7 @@ export const useCanBusStore = defineStore('canbus', () => {
   const historyStartTime = ref<number>(0);
   const historyEndTime = ref<number>(0);
   const isLoadingPlayback = ref(false);
+  const isRestoring = ref(false);
 
   const busStats = ref<BusStats>({
     totalFrames: 0,
@@ -130,6 +145,7 @@ export const useCanBusStore = defineStore('canbus', () => {
       lastUpdate: Date.now()
     };
     frameIdCounter = 0;
+    clearPlaybackStorage();
   }
 
   function loadMockDbc() {
@@ -305,6 +321,100 @@ export const useCanBusStore = defineStore('canbus', () => {
     await fetchHistoryRange();
     await loadPlaybackData();
   }
+
+  function savePlaybackState() {
+    if (isRestoring.value) return;
+    try {
+      const state: PersistedPlaybackState = {
+        isPlayback: isPlayback.value,
+        playbackStartTime: playbackStartTime.value,
+        playbackEndTime: playbackEndTime.value,
+        historyStartTime: historyStartTime.value,
+        historyEndTime: historyEndTime.value,
+        filterId: filterId.value,
+        filterText: filterText.value,
+        savedAt: Date.now()
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch (e) {
+      console.warn('Failed to save playback state:', e);
+    }
+  }
+
+  function savePlaybackFrames() {
+    if (isRestoring.value) return;
+    try {
+      const framesToSave = playbackFrames.value.slice(-MAX_CACHED_FRAMES);
+      localStorage.setItem(FRAMES_STORAGE_KEY, JSON.stringify(framesToSave));
+    } catch (e) {
+      console.warn('Failed to save playback frames:', e);
+    }
+  }
+
+  function clearPlaybackStorage() {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(FRAMES_STORAGE_KEY);
+    } catch (e) {
+      console.warn('Failed to clear playback storage:', e);
+    }
+  }
+
+  function restoreFromStorage() {
+    isRestoring.value = true;
+    try {
+      const stateStr = localStorage.getItem(STORAGE_KEY);
+      if (stateStr) {
+        const state: PersistedPlaybackState = JSON.parse(stateStr);
+        if (state && typeof state === 'object') {
+          if (typeof state.isPlayback === 'boolean') isPlayback.value = state.isPlayback;
+          if (typeof state.playbackStartTime === 'number') playbackStartTime.value = state.playbackStartTime;
+          if (typeof state.playbackEndTime === 'number') playbackEndTime.value = state.playbackEndTime;
+          if (typeof state.historyStartTime === 'number') historyStartTime.value = state.historyStartTime;
+          if (typeof state.historyEndTime === 'number') historyEndTime.value = state.historyEndTime;
+          if (typeof state.filterId === 'string') filterId.value = state.filterId;
+          if (typeof state.filterText === 'string') filterText.value = state.filterText;
+        }
+      }
+
+      const framesStr = localStorage.getItem(FRAMES_STORAGE_KEY);
+      if (framesStr && isPlayback.value) {
+        const cachedFrames: CanFrame[] = JSON.parse(framesStr);
+        if (Array.isArray(cachedFrames) && cachedFrames.length > 0) {
+          playbackFrames.value = cachedFrames;
+          if (dbcMessages.value.size === 0) {
+            loadMockDbc();
+          }
+          playbackSignals.value = buildSignalsFromFrames(cachedFrames);
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to restore from storage:', e);
+    } finally {
+      setTimeout(() => {
+        isRestoring.value = false;
+      }, 0);
+    }
+  }
+
+  watch(
+    () => [isPlayback.value, playbackStartTime.value, playbackEndTime.value, historyStartTime.value, historyEndTime.value, filterId.value, filterText.value],
+    () => {
+      savePlaybackState();
+    }
+  );
+
+  watch(
+    () => playbackFrames.value,
+    () => {
+      if (isPlayback.value) {
+        savePlaybackFrames();
+      }
+    },
+    { deep: true }
+  );
+
+  restoreFromStorage();
 
   return {
     frames,
